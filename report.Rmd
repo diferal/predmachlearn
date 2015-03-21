@@ -1,0 +1,95 @@
+---
+title: "Prediction Assignment"
+author: "John Doe"
+date: "Saturday, March 21, 2015"
+output: html_document
+---
+
+## Intro
+
+Using wearable devices is now possible to collect a large amount of data about personal activity relatively inexpensively. In this preport data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants are used. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of your of this report is to predict the manner in which participants did the exercise. This is the "classe" variable in the training set.
+
+## Data spliting
+
+First, data are read to R from the current working directory, where they have been downloaded in advance:
+```{r, cache=TRUE}
+training <- read.csv('./pml-training.csv', na.strings = c("","NA"), header = TRUE)
+testing <- read.csv('./pml-testing.csv', na.strings = c("","NA"), header = TRUE)
+```
+
+Class labels, which are true outcomes, are saved into separate variable **train.labels**. In addition, features/predictors only are saved to variables **train** and **test** for testing and training data respectively
+
+```{r, cache=TRUE}
+train.labels <- training$classe
+ind <- which(names(training) == 'classe')
+train <- training[,-ind]
+test <- testing[,-ind]
+```
+Our feature space consists of 159 features.
+
+## Feature selection
+
+Necessary R packages are sourced:
+```{r, cache = TRUE, results='hide'}
+require(caret)
+require(dplyr)
+```
+As a first step, dummy variables/features **subj1**,...,**subj6** are created. Each variable **subjI** has value 1 for the rows of data recorded from the subject I respectively, and 0 otherwise. This is done as a step to allow classifier to also take into account subject information, since usually there is quite large intersubject variability.
+```{r, cache = TRUE, results='hide'}
+subjects <- unique(train$user_name)
+train.dim <- dim(train)
+for (i in 1:6){
+  eval(parse(text=paste("train <- mutate(train, subj", i, " = as.numeric(train$user_name == subjects[", i, "]))", sep = "")))
+  eval(parse(text=paste("test <- mutate(test, subj", i, " = as.numeric(test$user_name == subjects[", i, "]))", sep = "")))
+}
+```
+This step lead to increasing dimension of geature space to 165.
+
+In the next step we remove features, which are clear unrelevent for classification. Additionally, features **user_name** is also removed, since we have already created 6 new features indicating subjects at previous step.
+```{r, cache = TRUE, results='hide'}
+col <- c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window', 'num_window');
+train <- train[,-which(names(train) %in% col)]
+test <- test[,-which(names(test) %in% col)]
+```
+As a result of this step, dimension of feature space is reduced to 158 features.
+
+Next, we remove columns with missing values.
+```{r, cache = TRUE, results='hide'}
+test <- test[,colSums(is.na(train)) == 0]
+train <- train[,colSums(is.na(train)) == 0]
+```
+This results in only 58 features in both training and test sets.
+
+As a following step, based on training data we try to find variables with near zero variance, which definitely won't be able to help as with class discrimination
+```{r, cache = TRUE, results='hide'}
+NzeroVar <- nearZeroVar(train)
+```
+But no features with near zero variance are found in training set. As such, this step does not lead to any elemination of features.
+
+As the last feature selection step, we estimate correlation between all features in training set and eliminate all but one features in set of correlated features (we considered features to be in this set of correlated features, if correlation coefficient between them is higher than 0.9). This is done since correlated features could lead to inferior performance of classifier
+```{r, cache = TRUE, results='hide'}
+features.corr <- cor(train) # estimate correlation matrix
+highcorr <- findCorrelation(features.corr,cutoff=0.9)
+train <- train[,-highcorr]
+test <- test[,-highcorr]
+```
+This lead to 49 features, that remain after whole feature selection procedure. Such reduction of features leads to the ones, which could be most beneficial for classification and, at the same time, skiping features which can only decrease classification performence. If feature selection process was data driven, it was done based on information obtained from training set only, but led to elimination of correspondent features in both training and test sets.
+
+## Training clasifier
+
+Since we have 6 class-label problem, we cannot use such classifiers as, for example, SVM (Support Vector Machine), which are designed for binary classification problems. Since among multi-class classifier, Random Forests (RF) are know to give high classification accuracy for different problems, we decided to also use RF for our ploblem.
+
+During training procedure, we use 5-fold cross-validation (CV)
+```{r, cache = TRUE, echo = FALSE}
+library('randomForest')
+```
+```{r, cache = TRUE, results='hide'}
+ctrl <- trainControl(method = "cv", number = 5)
+model <- train(train, train.labels, method = 'rf', trControl = ctrl)
+```
+
+Training lead to following model
+```{r, cache = TRUE}
+model$finalModel
+```
+As it is seen, RF classifier trained with 5-fold CV on our feature set leads to out of bag error 0.41%. As such, one would expect to have also very high accuracy (more than 99%) on unseen test data.
